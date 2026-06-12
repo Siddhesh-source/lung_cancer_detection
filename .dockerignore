@@ -1,0 +1,75 @@
+# KUB Risk Detector - Docker Ignore
+# Prevent unnecessary files from entering build context
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python cache and bytecode
+__pycache__
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# Data and large files
+data/
+models/*.pth
+models/*.h5
+*.pt
+*.ckpt
+*.onnx.bak
+
+# Notebooks
+notebooks/
+*.ipynb
+.ipynb_checkpoints/
+cell_history/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+*.sqlite
+
+# Test files
+test_*.py
+tests/
+pytest.ini
+.coverage
+htmlcov/
+
+# Documentation source
+docs/
+*.md
+!README.md
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
