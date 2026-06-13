@@ -565,7 +565,7 @@ async def predict_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
             inference_time_ms = (time.time() - start_time) * 1000
             
             # =====================================================================
-            # Lung Cancer Risk Scoring (NEW)
+            # Lung Cancer Risk Scoring 
             # =====================================================================
             lung_cancer_score, mass_prob, nodule_prob = calculate_lung_cancer_risk(
                 result['predictions']
