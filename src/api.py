@@ -37,6 +37,17 @@ from .preprocessor import get_preprocessor, ImagePreprocessor
 with open("config.yaml", "r") as f:
     _CONFIG = yaml.safe_load(f)
 
+# =============================================================================
+# Lung Cancer Risk Scoring Configuration
+# =============================================================================
+# Configurable thresholds for lung cancer risk classification
+HIGH_RISK_THRESHOLD = 0.70
+MODERATE_RISK_THRESHOLD = 0.30
+
+# Priority conditions for lung cancer assessment
+LUNG_CANCER_PRIMARY_CONDITIONS = ["Mass", "Nodule"]
+LUNG_CANCER_SECONDARY_CONDITIONS = ["Fibrosis"]
+
 # Global instances (initialized on startup)
 _predictor: ONNXPredictor = None
 _preprocessor: ImagePreprocessor = None
@@ -215,21 +226,32 @@ class SegmentationMask:
 # Utility Functions
 # =============================================================================
 
-def image_to_base64(image: np.ndarray) -> str:
+def image_to_base64(image: np.ndarray, format: str = '.jpg', quality: int = 75) -> str:
     """
-    Convert numpy image array to Base64 PNG string.
-    NO FILE SAVING - converts directly to Base64 in memory.
+    Convert numpy image array to Base64 string.
+    Uses JPEG compression by default to reduce payload size.
     
     Args:
         image: RGB image as numpy array (H, W, C)
+        format: Output format ('.jpg' or '.png')
+        quality: JPEG quality (1-100), ignored for PNG
     
     Returns:
-        Base64 encoded PNG string
+        Base64 encoded string
     """
-    # Encode image to memory as PNG
-    success, encoded = cv2.imencode('.png', image)
+    # Ensure uint8 format
+    if image.dtype != np.uint8:
+        image = (image * 255).astype(np.uint8)
+    
+    # Encode with compression to reduce base64 size
+    if format == '.jpg':
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        success, encoded = cv2.imencode(format, image, encode_params)
+    else:
+        success, encoded = cv2.imencode(format, image)
+    
     if not success:
-        raise ValueError("Failed to encode image to PNG format")
+        raise ValueError(f"Failed to encode image to {format} format")
     
     # Convert to Base64 string
     base64_str = base64.b64encode(encoded).decode('utf-8')
@@ -253,6 +275,75 @@ def classify_risk(confidence: float, threshold: float = 0.5) -> str:
         return "Abnormal"
     else:
         return "Normal"
+
+
+def calculate_lung_cancer_risk(all_probabilities: Dict[str, float]) -> tuple:
+    """
+    Calculate lung cancer risk score from ChestXray14 multi-label predictions.
+    
+    ONLY uses Mass and Nodule as lung cancer indicators.
+    Other conditions (Pneumothorax, Effusion, etc.) are NOT considered.
+    
+    Args:
+        all_probabilities: Dictionary mapping disease names to probabilities
+    
+    Returns:
+        Tuple of (risk_score, mass_probability, nodule_probability)
+    """
+    mass_prob = float(all_probabilities.get("Mass", 0.0))
+    nodule_prob = float(all_probabilities.get("Nodule", 0.0))
+    
+    # Lung cancer score = max of Mass or Nodule ONLY
+    # No secondary conditions (Fibrosis, etc.) included
+    lung_cancer_score = max(mass_prob, nodule_prob)
+    
+    return lung_cancer_score, mass_prob, nodule_prob
+
+
+def classify_lung_cancer_risk(risk_score: float) -> str:
+    """
+    Convert continuous risk score to categorical prediction.
+    
+    Args:
+        risk_score: Lung cancer risk score (0-1)
+    
+    Returns:
+        Categorical risk label
+    """
+    if risk_score >= HIGH_RISK_THRESHOLD:
+        return "High Risk"
+    elif risk_score >= MODERATE_RISK_THRESHOLD:
+        return "Moderate Risk"
+    else:
+        return "Low Risk"
+
+
+def ensure_json_serializable(value: Any) -> Any:
+    """
+    Convert numpy/torch types to JSON-serializable Python types.
+    
+    Args:
+        value: Any value that may need conversion
+    
+    Returns:
+        JSON-serializable Python type
+    """
+    import numpy as np
+    
+    if isinstance(value, (np.float32, np.float64)):
+        return float(value)
+    elif isinstance(value, (np.int32, np.int64)):
+        return int(value)
+    elif isinstance(value, np.ndarray):
+        return value.tolist()
+    elif hasattr(value, 'item'):  # torch tensor
+        return value.item()
+    elif isinstance(value, dict):
+        return {k: ensure_json_serializable(v) for k, v in value.items()}
+    elif isinstance(value, (list, tuple)):
+        return [ensure_json_serializable(v) for v in value]
+    else:
+        return value
 
 
 # =============================================================================
@@ -331,7 +422,7 @@ async def predict(file: UploadFile = File(...)) -> Dict[str, Any]:
     Analyze a single X-ray image.
     
     Input: Multipart Form Data with 'file' field containing the raw image
-    Output: JSON Response with prediction, confidence, visualizations (Base64)
+    Output: JSON Response with prediction, confidence, visualizations (Base64 JPEG)
     
     Returns:
         {
@@ -374,9 +465,23 @@ async def predict(file: UploadFile = File(...)) -> Dict[str, Any]:
         # Calculate inference time
         inference_time_ms = (time.time() - start_time) * 1000
         
-        # Classify risk
-        threshold = _CONFIG['model_settings']['confidence_threshold']
-        risk_classification = classify_risk(result['confidence'], threshold)
+        # =====================================================================
+        # Lung Cancer Risk Scoring (NEW)
+        # =====================================================================
+        # Calculate risk score from ChestXray14 multi-label predictions
+        lung_cancer_score, mass_prob, nodule_prob = calculate_lung_cancer_risk(
+            result['predictions']
+        )
+        
+        # Convert to categorical prediction
+        prediction = classify_lung_cancer_risk(lung_cancer_score)
+        
+        # Use lung cancer score as confidence
+        confidence_score = float(lung_cancer_score)
+        
+        # =====================================================================
+        # Visualization Generation (Preserved)
+        # =====================================================================
         
         # Generate Grad-CAM
         gradcam_generator = GradCAM(_predictor.session)
@@ -386,7 +491,7 @@ async def predict(file: UploadFile = File(...)) -> Dict[str, Any]:
         )
         
         # Generate Segmentation Mask
-        seg_mask = SegmentationMask.generate_mask(preprocessed, threshold=threshold)
+        seg_mask = SegmentationMask.generate_mask(preprocessed, threshold=0.5)
         segmentation_result = SegmentationMask.draw_contours(
             seg_mask, original_img, color=(0, 255, 0), thickness=2
         )
@@ -395,10 +500,16 @@ async def predict(file: UploadFile = File(...)) -> Dict[str, Any]:
         gradcam_base64 = image_to_base64(gradcam_overlay)
         segmentation_base64 = image_to_base64(segmentation_result)
         
-        # Build response according to spec
+        # =====================================================================
+        # Build Response (NEW - Exact Schema Required)
+        # =====================================================================
+        
+        # Ensure all values are JSON serializable
+        all_probs_serializable = ensure_json_serializable(result['predictions'])
+        
         response = {
-            "prediction": risk_classification,
-            "confidence_score": result['confidence'],
+            "prediction": prediction,
+            "confidence_score": confidence_score,
             "inference_time_ms": round(inference_time_ms, 2),
             "visualizations": {
                 "gradcam_overlay_base64": gradcam_base64,
@@ -407,7 +518,10 @@ async def predict(file: UploadFile = File(...)) -> Dict[str, Any]:
             "additional_inference_metadata": {
                 "filename": file.filename,
                 "top_disease": result['top_disease'],
-                "all_probabilities": result['predictions'],
+                "mass_probability": mass_prob,
+                "nodule_probability": nodule_prob,
+                "lung_cancer_risk_score": lung_cancer_score,
+                "all_probabilities": all_probs_serializable,
                 "model_version": "1.0.0",
                 "preprocessing_applied": ["CLAHE", "resize", "normalize"]
             }
@@ -450,8 +564,14 @@ async def predict_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
             result = _predictor.predict(preprocessed)
             inference_time_ms = (time.time() - start_time) * 1000
             
-            # Classify risk
-            risk_classification = classify_risk(result['confidence'], threshold)
+            # =====================================================================
+            # Lung Cancer Risk Scoring (NEW)
+            # =====================================================================
+            lung_cancer_score, mass_prob, nodule_prob = calculate_lung_cancer_risk(
+                result['predictions']
+            )
+            prediction = classify_lung_cancer_risk(lung_cancer_score)
+            confidence_score = float(lung_cancer_score)
             
             # Generate visualizations
             gradcam_generator = GradCAM(_predictor.session)
@@ -465,10 +585,13 @@ async def predict_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
             gradcam_base64 = image_to_base64(gradcam_overlay)
             segmentation_base64 = image_to_base64(segmentation_result)
             
+            # Ensure JSON serializable
+            all_probs_serializable = ensure_json_serializable(result['predictions'])
+            
             # Build result
             results.append({
-                "prediction": risk_classification,
-                "confidence_score": result['confidence'],
+                "prediction": prediction,
+                "confidence_score": confidence_score,
                 "inference_time_ms": round(inference_time_ms, 2),
                 "visualizations": {
                     "gradcam_overlay_base64": gradcam_base64,
@@ -477,7 +600,12 @@ async def predict_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
                 "additional_inference_metadata": {
                     "filename": file.filename,
                     "top_disease": result['top_disease'],
-                    "all_probabilities": result['predictions']
+                    "mass_probability": mass_prob,
+                    "nodule_probability": nodule_prob,
+                    "lung_cancer_risk_score": lung_cancer_score,
+                    "all_probabilities": all_probs_serializable,
+                    "model_version": "1.0.0",
+                    "preprocessing_applied": ["CLAHE", "resize", "normalize"]
                 }
             })
         
