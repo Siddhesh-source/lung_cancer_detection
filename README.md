@@ -1,15 +1,17 @@
-# KUB Risk Detector
+# Clinical Validation of AI-Based Diagnostic Screening System for Lung Cancer Detection on Chest X-Rays
 
-A production-ready FastAPI-based X-ray analysis service for KUB (Kidney, Ureter, Bladder) risk detection using ONNX models.
+A production-ready FastAPI-based X-ray analysis service for **lung cancer risk screening** using ChestX-ray14 multi-label classification with ONNX models.
 
 ## Features
 
+- **Lung Cancer Risk Assessment** - Focused risk scoring using Mass and Nodule detection
+- **Multi-label Classification** - 14 thoracic conditions detected
 - **FastAPI** web server with async endpoints
 - **ONNX Runtime** for efficient model inference
 - **CLAHE** preprocessing for lung region enhancement
+- **Grad-CAM Visualization** - Explainable AI heatmaps
 - **Batch prediction** support (up to 10 images)
 - **Docker** containerized deployment
-- **Health checks** and model info endpoints
 
 ## Quick Start
 
@@ -66,18 +68,64 @@ curl -X POST http://localhost:8000/predict_batch \
 
 ```json
 {
-  "filename": "xray.png",
-  "predictions": {
-    "Atelectasis": 0.12,
-    "Cardiomegaly": 0.85,
-    "Effusion": 0.23,
-    ...
+  "prediction": "Low Risk",
+  "confidence_score": 0.2578,
+  "inference_time_ms": 115.07,
+  "visualizations": {
+    "gradcam_overlay_base64": "/9j/4AAQSkZJRg...",
+    "segmentation_mask_base64": "/9j/4AAQSkZJRg..."
   },
-  "top_disease": "Cardiomegaly",
-  "confidence": 0.85,
-  "processing_time_ms": 45.2
+  "additional_inference_metadata": {
+    "filename": "xray.png",
+    "top_disease": "Pneumothorax",
+    "mass_probability": 0.2578,
+    "nodule_probability": 0.1141,
+    "lung_cancer_risk_score": 0.2578,
+    "all_probabilities": {
+      "Atelectasis": 0.021,
+      "Cardiomegaly": 0.001,
+      "Effusion": 0.062,
+      "Infiltration": 0.161,
+      "Mass": 0.258,
+      "Nodule": 0.114,
+      "Pneumonia": 0.022,
+      "Pneumothorax": 0.814,
+      "Consolidation": 0.051,
+      "Edema": 0.022,
+      "Emphysema": 0.456,
+      "Fibrosis": 0.028,
+      "Pleural_Thickening": 0.068,
+      "Hernia": 0.0001
+    },
+    "model_version": "1.0.0",
+    "preprocessing_applied": ["CLAHE", "resize", "normalize"]
+  }
 }
 ```
+
+### Response Fields Explained
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prediction` | string | Risk category: "High Risk", "Moderate Risk", or "Low Risk" |
+| `confidence_score` | float | Lung cancer risk score (0-1), based on max(Mass, Nodule) |
+| `inference_time_ms` | float | Model inference time in milliseconds |
+| `visualizations` | object | Base64-encoded visualization images |
+| `gradcam_overlay_base64` | string | Grad-CAM heatmap overlaid on X-ray (JPEG format) |
+| `segmentation_mask_base64` | string | Segmentation mask with contours (JPEG format) |
+| `additional_inference_metadata` | object | Detailed model outputs and metadata |
+| `top_disease` | string | Highest probability disease across all 14 classes |
+| `mass_probability` | float | Probability of Mass (primary lung cancer indicator) |
+| `nodule_probability` | float | Probability of Nodule (primary lung cancer indicator) |
+| `lung_cancer_risk_score` | float | max(Mass, Nodule) - used for risk classification |
+
+### Risk Classification Thresholds
+
+- **High Risk**: score ≥ 0.70
+- **Moderate Risk**: 0.30 ≤ score < 0.70
+- **Low Risk**: score < 0.30
+
+**Note:** The lung cancer risk score is calculated using only Mass and Nodule probabilities (primary indicators for lung cancer). Other conditions (Pneumothorax, Effusion, etc.) are reported in `all_probabilities` but do not influence the risk prediction.
 
 ## Project Structure
 
