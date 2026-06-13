@@ -2,13 +2,14 @@
 FROM python:3.10-slim
 
 # Step 2: Install basic system tools needed for image processing (OpenCV dependencies)
-RUN apt-get update && apt-get install -y \
-    libglib2.0-0 \
-    libgl1 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Retry loop handles transient mirror failures
+RUN for i in 1 2 3; do \
+        apt-get update && apt-get install -y \
+            libglib2.0-0 libgl1 libsm6 libxext6 libxrender-dev \
+            && rm -rf /var/lib/apt/lists/* \
+            && break; \
+        sleep 5; \
+    done
 
 # Step 3: Set up the working directory inside the container
 WORKDIR /app
